@@ -37,7 +37,7 @@ func NewScanner(version etc.VersionInfo, config etc.ScannerAquaCSP) scanner.Vuln
 	}
 }
 
-func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, options scanner.Options) (*batchv1.Job, *corev1.Secret, error) {
+func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, options scanner.Options) (*batchv1.Job, error) {
 	jobName := uuid.New().String()
 	initContainerName := jobName
 
@@ -50,7 +50,7 @@ func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, opti
 
 	containerImagesAsJSON, err := containerImages.AsJSON()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	return &batchv1.Job{
@@ -58,9 +58,10 @@ func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, opti
 			Name:      jobName,
 			Namespace: options.Namespace,
 			Labels: labels.Set{
-				kube.LabelResourceKind:      string(resource.Kind),
-				kube.LabelResourceName:      resource.Name,
-				kube.LabelResourceNamespace: resource.Namespace,
+				kube.LabelResourceKind:         string(resource.Kind),
+				kube.LabelResourceName:         resource.Name,
+				kube.LabelResourceNamespace:    resource.Namespace,
+				"app.kubernetes.io/managed-by": "starboard-operator",
 			},
 			Annotations: map[string]string{
 				kube.AnnotationContainerImages: containerImagesAsJSON,
@@ -73,9 +74,10 @@ func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, opti
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels.Set{
-						kube.LabelResourceKind:      string(resource.Kind),
-						kube.LabelResourceName:      resource.Name,
-						kube.LabelResourceNamespace: resource.Namespace,
+						kube.LabelResourceKind:         string(resource.Kind),
+						kube.LabelResourceName:         resource.Name,
+						kube.LabelResourceNamespace:    resource.Namespace,
+						"app.kubernetes.io/managed-by": "starboard-operator",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -120,7 +122,7 @@ func (s *aquaScanner) NewScanJob(resource kube.Object, spec corev1.PodSpec, opti
 				},
 			},
 		},
-	}, nil, nil
+	}, nil
 }
 
 func (s *aquaScanner) newScanJobContainer(podContainer corev1.Container) corev1.Container {

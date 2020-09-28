@@ -2,20 +2,21 @@ package controllers
 
 import (
 	"context"
-	"reflect"
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/aquasecurity/starboard-operator/pkg/resources"
 
 	"github.com/aquasecurity/starboard-operator/pkg/etc"
 	"github.com/aquasecurity/starboard-operator/pkg/reports"
 	"github.com/aquasecurity/starboard-operator/pkg/scanner"
-	"github.com/aquasecurity/starboard/pkg/docker"
-
 	batchv1 "k8s.io/api/batch/v1"
 
 	"github.com/aquasecurity/starboard/pkg/kube"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,109 +46,141 @@ type PodReconciler struct {
 func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 
-	if r.Config.Namespace == req.Namespace {
-		return ctrl.Result{}, nil
-	}
-
 	pod := &corev1.Pod{}
 
-	err := r.Client.Get(ctx, req.NamespacedName, pod)
+	log := r.Log.WithValues("pod", req.NamespacedName)
+
+	installMode, err := r.Config.GetInstallMode()
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("getting install mode: %w", err)
+	}
+
+	if r.IgnorePodInOperatorNamespace(installMode, req.NamespacedName) {
+		log.V(1).Info("Ignoring Pod run in the operator namespace")
+		return ctrl.Result{}, nil
+	}
+
+	// Retrieve the Pod from cache.
+	err = r.Client.Get(ctx, req.NamespacedName, pod)
 	if err != nil && errors.IsNotFound(err) {
+		log.V(1).Info("Ignoring Pod that must have been deleted")
 		return ctrl.Result{}, nil
 	} else if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("getting pod from cache: %w", err)
 	}
 
-	// Check if the Pod is being terminated
+	// Check if the Pod is managed by the operator, i.e. is controlled by a scan Job created by the PodReconciler.
+	if IsPodManagedByStarboardOperator(pod) {
+		log.V(1).Info("Ignoring Pod managed by this operator")
+		return ctrl.Result{}, nil
+	}
+
+	// Check if the Pod is being terminated.
 	if pod.DeletionTimestamp != nil {
+		log.V(1).Info("Ignoring Pod that is being terminated")
 		return ctrl.Result{}, nil
 	}
 
-	// Check if the Pod has been scheduled to a Node and all its containers are ready
-	if !AllContainersHaveReadyCondition(pod) {
+	// Check if the Pod containers are ready.
+	if !resources.HasContainersReadyCondition(pod) {
+		log.V(1).Info("Ignoring Pod that is being scheduled")
 		return ctrl.Result{}, nil
 	}
 
-	owner := GetImmediateOwnerReference(pod)
+	owner := resources.GetImmediateOwnerReference(pod)
+	log.V(1).Info("Resolving immediate Pod owner", "owner", owner)
 
-	// Check if the Pod's containers have corresponding vulnerability reports
-	hasDesiredState, err := r.hasVulnerabilityReports(ctx, owner, pod)
+	// Check if containers of the Pod have corresponding VulnerabilityReports.
+	hasVulnerabilityReports, err := r.Store.HasVulnerabilityReports(ctx, owner, resources.GetContainerImagesFromPodSpec(pod.Spec))
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("getting vulnerability reports: %w", err)
 	}
 
-	if hasDesiredState {
+	if hasVulnerabilityReports {
+		log.V(1).Info("Ignoring Pod that already has VulnerabilityReports")
 		return ctrl.Result{}, nil
 	}
 
-	// Create a scan Job to find vulnerabilities in the Pod container images
+	// Create a scan Job to create VulnerabilityReports for the Pod containers images.
 	err = r.ensureScanJob(ctx, owner, pod)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("ensuring scan job: %w", err)
 	}
 
 	return ctrl.Result{}, nil
 }
 
-// hasVulnerabilityReports checks if the vulnerability reports exist for the specified workload.
-func (r *PodReconciler) hasVulnerabilityReports(ctx context.Context, owner kube.Object, p *corev1.Pod) (bool, error) {
-	vulnerabilityReports, err := r.Store.Read(ctx, owner)
-	if err != nil {
-		return false, err
-	}
+func (r *PodReconciler) ensureScanJob(ctx context.Context, owner kube.Object, pod *corev1.Pod) error {
+	log := r.Log.WithValues("pod", fmt.Sprintf("%s/%s", pod.Namespace, pod.Name))
 
-	actual := map[string]bool{}
-	for containerName, _ := range vulnerabilityReports {
-		actual[containerName] = true
-	}
-
-	expected := map[string]bool{}
-	for _, container := range p.Spec.Containers {
-		expected[container.Name] = true
-	}
-
-	return reflect.DeepEqual(actual, expected), nil
-}
-
-func (r *PodReconciler) ensureScanJob(ctx context.Context, owner kube.Object, p *corev1.Pod) error {
-	log := r.Log.WithValues("owner.kind", owner.Kind,
-		"owner.name", owner.Name,
-		"owner.namespace", owner.Namespace,
-		"pod.name", p.Name)
+	log.V(1).Info("Ensuring scan Job")
 
 	jobList := &batchv1.JobList{}
 	err := r.Client.List(ctx, jobList, client.MatchingLabels{
-		kube.LabelResourceNamespace: p.Namespace,
+		kube.LabelResourceNamespace: pod.Namespace,
 		kube.LabelResourceKind:      string(owner.Kind),
 		kube.LabelResourceName:      owner.Name,
 	}, client.InNamespace(r.Config.Namespace))
 	if err != nil {
-		return err
+		return fmt.Errorf("listing jos: %w", err)
 	}
 
 	if len(jobList.Items) > 0 {
-		log.Info("Scan job already exists")
+		log.V(1).Info("Scan job already exists",
+			"job", fmt.Sprintf("%s/%s", jobList.Items[0].Namespace, jobList.Items[0].Name))
 		return nil
 	}
 
-	scanJob, secret, err := r.Scanner.NewScanJob(owner, p.Spec, scanner.Options{
+	scanJob, err := r.Scanner.NewScanJob(owner, pod.Spec, scanner.Options{
 		Namespace:          r.Config.Namespace,
 		ServiceAccountName: r.Config.ServiceAccount,
-		ImageCredentials:   make(map[string]docker.Auth),
 		ScanJobTimeout:     r.Config.ScanJobTimeout,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("constructing scan job: %w", err)
 	}
-	if secret != nil {
-		log.Info("Creating secret", "secret.name", secret.Name, "secret.namespace", secret.Namespace)
-		err = r.Client.Create(ctx, secret)
-		if err != nil {
-			return err
-		}
-	}
-	log.Info("Creating scan job", "job.name", scanJob.Name, "job.namespace", scanJob.Namespace)
+	log.V(1).Info("Creating scan job",
+		"job", fmt.Sprintf("%s/%s", scanJob.Namespace, scanJob.Name))
 	return r.Client.Create(ctx, scanJob)
+}
+
+// IgnorePodInOperatorNamespace determines whether to reconcile the specified Pod
+// based on the give InstallMode or not. Returns true if the Pod should be ignored,
+// false otherwise.
+//
+// In the SingleNamespace install mode we're configuring Client cache
+// to watch the operator namespace, in which the operator runs scan Jobs.
+// However, we do not want to scan the workloads that might run in the
+// operator namespace.
+//
+// In the MultiNamespace install mode we're configuring Client cache
+// to watch the operator namespace, in which the operator runs scan Jobs.
+// However, we do not want to scan the workloads that might run in the
+// operator namespace unless the operator namespace is added to the list
+// of target namespaces.
+func (r *PodReconciler) IgnorePodInOperatorNamespace(installMode etc.InstallMode, pod types.NamespacedName) bool {
+	if installMode == etc.InstallModeSingleNamespace &&
+		pod.Namespace == r.Config.Namespace {
+		return true
+	}
+
+	if installMode == etc.InstallModeMultiNamespace &&
+		pod.Namespace == r.Config.Namespace &&
+		!SliceContainsString(r.Config.GetTargetNamespaces(), r.Config.Namespace) {
+		return true
+	}
+
+	return false
+}
+
+// IsPodManagedByStarboardOperator returns true if the specified Pod
+// is managed by the Starboard Operator, false otherwise.
+//
+// We define managed Pods as ones controlled by Jobs created by the Starboard Operator.
+// They're labeled with `app.kubernetes.io/managed-by=starboard-operator`.
+func IsPodManagedByStarboardOperator(pod *corev1.Pod) bool {
+	managedBy, exists := pod.Labels["app.kubernetes.io/managed-by"]
+	return exists && managedBy == "starboard-operator"
 }
 
 func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -156,27 +189,14 @@ func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func AllContainersHaveReadyCondition(pod *corev1.Pod) bool {
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type != corev1.ContainersReady {
-			return false
+// SliceContainsString returns true if the specified slice of strings
+// contains the give value, false otherwise.
+func SliceContainsString(slice []string, value string) bool {
+	exists := false
+	for _, targetNamespace := range slice {
+		if targetNamespace == value {
+			exists = true
 		}
 	}
-	return true
-}
-
-func GetImmediateOwnerReference(pod *corev1.Pod) kube.Object {
-	ownerRef := metav1.GetControllerOf(pod)
-	if ownerRef != nil {
-		return kube.Object{
-			Namespace: pod.Namespace,
-			Kind:      kube.Kind(ownerRef.Kind),
-			Name:      ownerRef.Name,
-		}
-	}
-	return kube.Object{
-		Namespace: pod.Namespace,
-		Kind:      kube.KindPod,
-		Name:      pod.Name,
-	}
+	return exists
 }

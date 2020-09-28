@@ -1,7 +1,6 @@
 package etc
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,10 +21,12 @@ type Config struct {
 }
 
 type Operator struct {
-	Namespace       string        `env:"OPERATOR_NAMESPACE"`
-	TargetNamespace string        `env:"OPERATOR_TARGET_NAMESPACE"`
-	ServiceAccount  string        `env:"OPERATOR_SERVICE_ACCOUNT" envDefault:"starboard-operator"`
-	ScanJobTimeout  time.Duration `env:"OPERATOR_SCAN_JOB_TIMEOUT" envDefault:"5m"`
+	Namespace          string        `env:"OPERATOR_NAMESPACE"`
+	TargetNamespaces   string        `env:"OPERATOR_TARGET_NAMESPACES"`
+	ServiceAccount     string        `env:"OPERATOR_SERVICE_ACCOUNT" envDefault:"starboard-operator"`
+	ScanJobTimeout     time.Duration `env:"OPERATOR_SCAN_JOB_TIMEOUT" envDefault:"5m"`
+	MetricsBindAddress string        `env:"OPERATOR_METRICS_BIND_ADDRESS" envDefault:":8080"`
+	LogDevMode         bool          `env:"OPERATOR_LOG_DEV_MODE" envDefault:"false"`
 }
 
 type ScannerTrivy struct {
@@ -48,8 +49,8 @@ func GetOperatorConfig() (Config, error) {
 }
 
 // GetOperatorNamespace returns the namespace the operator should be running in.
-func (c Config) GetOperatorNamespace() (string, error) {
-	namespace := c.Operator.Namespace
+func (c Operator) GetOperatorNamespace() (string, error) {
+	namespace := c.Namespace
 	if namespace != "" {
 		return namespace, nil
 	}
@@ -57,25 +58,40 @@ func (c Config) GetOperatorNamespace() (string, error) {
 }
 
 // GetTargetNamespaces returns namespaces the operator should be watching for changes.
-func (c Config) GetTargetNamespaces() ([]string, error) {
-	namespace := c.Operator.TargetNamespace
-	if namespace != "" {
-		return strings.Split(namespace, ","), nil
+func (c Operator) GetTargetNamespaces() []string {
+	namespaces := c.TargetNamespaces
+	if namespaces != "" {
+		return strings.Split(namespaces, ",")
 	}
-	return nil, fmt.Errorf("%s must be set", "OPERATOR_TARGET_NAMESPACE")
+	return []string{}
 }
 
-// ResolveInstallMode resolves install mode defined by Operator Lifecycle Manager.
-// We do that for debugging purposes.
-func ResolveInstallMode(operatorNamespace string, targetNamespaces []string) (string, error) {
+// InstallMode represents multitenancy support defined by the Operator Lifecycle Manager spec.
+type InstallMode string
+
+const (
+	InstallModeOwnNamespace    InstallMode = "OwnNamespace"
+	InstallModeSingleNamespace InstallMode = "SingleNamespace"
+	InstallModeMultiNamespace  InstallMode = "MultiNamespace"
+	InstallModeAllNamespaces   InstallMode = "AllNamespaces"
+)
+
+// GetInstallMode resolves InstallMode based on configured operator and target namespaces.
+func (c Operator) GetInstallMode() (InstallMode, error) {
+	operatorNamespace, err := c.GetOperatorNamespace()
+	if err != nil {
+		return "", nil
+	}
+	targetNamespaces := c.GetTargetNamespaces()
+
 	if len(targetNamespaces) == 1 && operatorNamespace == targetNamespaces[0] {
-		return "OwnNamespace", nil
+		return InstallModeOwnNamespace, nil
 	}
 	if len(targetNamespaces) == 1 && operatorNamespace != targetNamespaces[0] {
-		return "SingleNamespace", nil
+		return InstallModeSingleNamespace, nil
 	}
 	if len(targetNamespaces) > 1 {
-		return "MultiNamespace", nil
+		return InstallModeMultiNamespace, nil
 	}
-	return "", errors.New("unsupported install mode")
+	return InstallModeAllNamespaces, nil
 }
