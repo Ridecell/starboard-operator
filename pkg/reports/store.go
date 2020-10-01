@@ -3,7 +3,7 @@ package reports
 import (
 	"context"
 	"fmt"
-	"reflect"
+	//"reflect"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -26,7 +26,7 @@ import (
 
 type StoreInterface interface {
 	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities) error
-	Read(ctx context.Context, workload kube.Object) (vulnerabilities.WorkloadVulnerabilities, error)
+	Read(ctx context.Context, workload kube.Object, containerImage string) (vulnerabilities.WorkloadVulnerabilities, error)
 	HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error)
 }
 
@@ -52,6 +52,8 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 		reportName := fmt.Sprintf("%s-%s-%s", strings.ToLower(string(workload.Kind)),
 			workload.Name, containerName)
 
+		image, tag := s.getImageRepoTags(fmt.Sprintf("%s:%s", report.Artifact.Repository, report.Artifact.Tag))
+
 		vulnerabilityReport := &starboardv1alpha1.VulnerabilityReport{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      reportName,
@@ -61,6 +63,7 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 					kube.LabelResourceName:      workload.Name,
 					kube.LabelResourceNamespace: workload.Namespace,
 					kube.LabelContainerName:     containerName,
+					"starboard.container.image": fmt.Sprintf("%s-%s", image, tag),
 				},
 			},
 			Report: report,
@@ -78,13 +81,13 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 	return nil
 }
 
-func (s *Store) Read(ctx context.Context, workload kube.Object) (vulnerabilities.WorkloadVulnerabilities, error) {
+func (s *Store) Read(ctx context.Context, workload kube.Object, containerImage string) (vulnerabilities.WorkloadVulnerabilities, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
 
+	image, tag := s.getImageRepoTags(containerImage)
+
 	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{
-		kube.LabelResourceKind:      string(workload.Kind),
-		kube.LabelResourceNamespace: workload.Namespace,
-		kube.LabelResourceName:      workload.Name,
+		"starboard.container.image": fmt.Sprintf("%s-%s", image, tag),
 	}, client.InNamespace(workload.Namespace))
 	if err != nil {
 		return nil, err
@@ -129,20 +132,44 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 }
 
 func (s *Store) HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error) {
-	vulnerabilityReports, err := s.Read(ctx, owner)
-	if err != nil {
-		return false, err
+
+	imageReportCount := 0
+	for _, containerImage := range containerImages {
+		vulnerabilityReports, err := s.Read(ctx, owner, containerImage)
+		if err != nil {
+			return false, err
+		}
+		imageReportCount = imageReportCount + len(vulnerabilityReports)
 	}
 
-	actual := map[string]bool{}
-	for containerName, _ := range vulnerabilityReports {
-		actual[containerName] = true
+	if len(containerImages) > imageReportCount {
+		return false, nil
 	}
 
-	expected := map[string]bool{}
-	for containerName, _ := range containerImages {
-		expected[containerName] = true
-	}
+	return true, nil
+	// actual := map[string]bool{}
+	// for containerName, _ := range vulnerabilityReports {
+	// 	actual[containerName] = true
+	// }
+	//
+	// expected := map[string]bool{}
+	// for containerName, _ := range containerImages {
+	// 	expected[containerName] = true
+	// }
 
-	return reflect.DeepEqual(actual, expected), nil
+	//return reflect.DeepEqual(actual, expected), nil
+}
+
+func (s *Store) getImageRepoTags(imageString string) (string, string) {
+	split := strings.Split(imageString, "/")
+	if len(split) > 1 {
+		split = strings.Split(split[len(split)-1], ":")
+	} else {
+		split = strings.Split(split[0], ":")
+		if len(split) < 2 {
+			split = append(split, "latest")
+		}
+	}
+	//Return image, tag
+	return split[0], split[1]
 }
