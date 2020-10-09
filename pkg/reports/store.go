@@ -57,11 +57,13 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 				Name:      reportName,
 				Namespace: workload.Namespace,
 				Labels: labels.Set{
-					kube.LabelResourceKind:          string(workload.Kind),
-					kube.LabelResourceName:          workload.Name,
-					kube.LabelResourceNamespace:     workload.Namespace,
-					kube.LabelContainerName:         containerName,
-					"starboard.container.imagehash": containerImages[containerName],
+					kube.LabelResourceKind:      string(workload.Kind),
+					kube.LabelResourceName:      workload.Name,
+					kube.LabelResourceNamespace: workload.Namespace,
+					kube.LabelContainerName:     containerName,
+				},
+				Annotations: map[string]string{
+					"starboard.container.imagehash": strings.Split(containerImages[containerName], " ")[1],
 				},
 			},
 			Report: report,
@@ -82,17 +84,16 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (vulnerabilities.WorkloadVulnerabilities, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
 
-	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{
-		"starboard.container.imagehash": containerImageHash,
-	}, client.InNamespace(workload.Namespace))
+	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{}, client.InNamespace(workload.Namespace))
 	if err != nil {
 		return nil, err
 	}
 
 	reports := make(map[string]starboardv1alpha1.VulnerabilityScanResult)
 	for _, item := range vulnerabilityList.Items {
-		if container, ok := item.Labels[kube.LabelContainerName]; ok {
-			reports[container] = item.Report
+		if containerHash, ok := item.Annotations["starboard.container.imagehash"]; ok && containerHash == strings.Split(containerImageHash, " ")[1] {
+			reports[containerHash] = item.Report
+			break
 		}
 	}
 	return reports, nil

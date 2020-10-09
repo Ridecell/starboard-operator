@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aquasecurity/starboard-operator/pkg/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"strings"
 
 	"github.com/aquasecurity/starboard-operator/pkg/etc"
 	"github.com/aquasecurity/starboard-operator/pkg/logs"
@@ -114,7 +115,7 @@ func (r *JobReconciler) processCompleteScanJob(ctx context.Context, scanJob *bat
 		if err != nil {
 			return fmt.Errorf("getting logs for pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(container.Image, logsReader)
+		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(strings.Split(containerImages[container.Name], " ")[0], logsReader)
 		if err != nil {
 			return err
 		}

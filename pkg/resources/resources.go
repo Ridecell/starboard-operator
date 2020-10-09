@@ -16,7 +16,8 @@ func GetContainerImagesFromPodStatus(status corev1.PodStatus) kube.ContainerImag
 	for _, container := range status.ContainerStatuses {
 		// Extract Image hash from Image ID
 		imageIdSlice := strings.Split(container.ImageID, ":")
-		images[container.Name] = imageIdSlice[len(imageIdSlice)-1]
+		// Add containerName : "imageName<space>Imagehash" pair
+		images[container.Name] = fmt.Sprintf("%s %s", container.Image, imageIdSlice[len(imageIdSlice)-1])
 	}
 	return images
 }

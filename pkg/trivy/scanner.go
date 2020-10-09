@@ -66,7 +66,8 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, status corev1.PodStatus,
 	for i, c := range status.ContainerStatuses {
 		// Container name and image hash pair
 		imageIdSlice := strings.Split(c.ImageID, ":")
-		containerImages[c.Name] = imageIdSlice[len(imageIdSlice)-1]
+		// Add containerName : "imageName<space>Imagehash" pair
+		containerImages[c.Name] = fmt.Sprintf("%s %s", c.Image, imageIdSlice[len(imageIdSlice)-1])
 
 		var envs []corev1.EnvVar
 
