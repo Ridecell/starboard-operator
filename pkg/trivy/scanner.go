@@ -3,6 +3,7 @@ package trivy
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aquasecurity/starboard/pkg/find/vulnerabilities/trivy"
 
@@ -30,7 +31,7 @@ func NewScanner() scanner.VulnerabilityScanner {
 type trivyScanner struct {
 }
 
-func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, options scanner.Options) (*batchv1.Job, error) {
+func (s *trivyScanner) NewScanJob(workload kube.Object, status corev1.PodStatus, options scanner.Options) (*batchv1.Job, error) {
 	jobName := fmt.Sprintf(uuid.New().String())
 
 	initContainerName := jobName
@@ -61,9 +62,11 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 
 	containerImages := kube.ContainerImages{}
 
-	scanJobContainers := make([]corev1.Container, len(spec.Containers))
-	for i, c := range spec.Containers {
-		containerImages[c.Name] = c.Image
+	scanJobContainers := make([]corev1.Container, len(status.ContainerStatuses))
+	for i, c := range status.ContainerStatuses {
+		// Container name and image hash pair
+		imageIdSlice := strings.Split(c.ImageID, ":")
+		containerImages[c.Name] = imageIdSlice[len(imageIdSlice)-1]
 
 		var envs []corev1.EnvVar
 

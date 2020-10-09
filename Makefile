@@ -16,7 +16,7 @@ SCANNER_IMAGE := aquasec/starboard-scanner-aqua:$(IMAGE_TAG)
 modules:
 	go mod tidy
 
-build: operator scanner
+build: operator #scanner
 
 scanner: $(SOURCES)
 	GOOS=linux go build -o bin/scanner cmd/scanner/main.go
@@ -28,7 +28,7 @@ operator: $(SOURCES)
 test:
 	CGO_ENABLED=1 go test -v -short -race -coverprofile=coverage.txt -covermode=atomic ./...
 
-docker-build: docker-build-operator docker-build-scanner
+docker-build: docker-build-operator #docker-build-scanner
 
 docker-build-operator: build
 	docker build --no-cache -t $(OPERATOR_IMAGE) -f Dockerfile.operator bin

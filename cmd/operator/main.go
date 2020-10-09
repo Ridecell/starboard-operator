@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	"github.com/aquasecurity/starboard-operator/pkg/aqua"
+	//"github.com/aquasecurity/starboard-operator/pkg/aqua"
 
 	"github.com/aquasecurity/starboard-operator/pkg/scanner"
 	"github.com/aquasecurity/starboard-operator/pkg/trivy"
@@ -190,9 +190,9 @@ func getEnabledScanner(config etc.Config) (scanner.VulnerabilityScanner, error) 
 		setupLog.Info("Using Trivy as vulnerability scanner", "version", config.ScannerTrivy.Version)
 		return trivy.NewScanner(), nil
 	}
-	if config.ScannerAquaCSP.Enabled {
-		setupLog.Info("Using Aqua CSP as vulnerability scanner", "version", config.ScannerAquaCSP.Version)
-		return aqua.NewScanner(versionInfo, config.ScannerAquaCSP), nil
-	}
+	// if config.ScannerAquaCSP.Enabled {
+	// 	setupLog.Info("Using Aqua CSP as vulnerability scanner", "version", config.ScannerAquaCSP.Version)
+	// 	return aqua.NewScanner(versionInfo, config.ScannerAquaCSP), nil
+	// }
 	return nil, errors.New("invalid configuration: unhandled vulnerability scanners config")
 }

@@ -91,7 +91,7 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	log.V(1).Info("Resolving immediate Pod owner", "owner", owner)
 
 	// Check if containers of the Pod have corresponding VulnerabilityReports.
-	hasVulnerabilityReports, err := r.Store.HasVulnerabilityReports(ctx, owner, resources.GetContainerImagesFromPodSpec(pod.Spec))
+	hasVulnerabilityReports, err := r.Store.HasVulnerabilityReports(ctx, owner, resources.GetContainerImagesFromPodStatus(pod.Status))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("getting vulnerability reports: %w", err)
 	}
@@ -131,7 +131,7 @@ func (r *PodReconciler) ensureScanJob(ctx context.Context, owner kube.Object, po
 		return nil
 	}
 
-	scanJob, err := r.Scanner.NewScanJob(owner, pod.Spec, scanner.Options{
+	scanJob, err := r.Scanner.NewScanJob(owner, pod.Status, scanner.Options{
 		Namespace:          r.Config.Namespace,
 		ServiceAccountName: r.Config.ServiceAccount,
 		ScanJobTimeout:     r.Config.ScanJobTimeout,

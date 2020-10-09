@@ -114,7 +114,7 @@ func (r *JobReconciler) processCompleteScanJob(ctx context.Context, scanJob *bat
 		if err != nil {
 			return fmt.Errorf("getting logs for pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(containerImages[container.Name], logsReader)
+		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(container.Image, logsReader)
 		if err != nil {
 			return err
 		}
@@ -122,7 +122,7 @@ func (r *JobReconciler) processCompleteScanJob(ctx context.Context, scanJob *bat
 	}
 
 	log.Info("Writing VulnerabilityReports", "owner", workload)
-	err = r.Store.Write(ctx, workload, vulnerabilityReports)
+	err = r.Store.Write(ctx, workload, vulnerabilityReports, containerImages)
 	if err != nil {
 		return fmt.Errorf("writing vulnerability reports: %w", err)
 	}

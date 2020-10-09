@@ -25,7 +25,7 @@ import (
 )
 
 type StoreInterface interface {
-	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities) error
+	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities, containerImages kube.ContainerImages) error
 	Read(ctx context.Context, workload kube.Object, containerImage string) (vulnerabilities.WorkloadVulnerabilities, error)
 	HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error)
 }
@@ -42,7 +42,7 @@ func NewStore(client client.Client, scheme *runtime.Scheme) *Store {
 	}
 }
 
-func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities) error {
+func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities, containerImages kube.ContainerImages) error {
 	owner, err := s.getRuntimeObjectFor(ctx, workload)
 	if err != nil {
 		return err
@@ -52,18 +52,16 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 		reportName := fmt.Sprintf("%s-%s-%s", strings.ToLower(string(workload.Kind)),
 			workload.Name, containerName)
 
-		image, tag := s.getImageRepoTags(fmt.Sprintf("%s:%s", report.Artifact.Repository, report.Artifact.Tag))
-
 		vulnerabilityReport := &starboardv1alpha1.VulnerabilityReport{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      reportName,
 				Namespace: workload.Namespace,
 				Labels: labels.Set{
-					kube.LabelResourceKind:      string(workload.Kind),
-					kube.LabelResourceName:      workload.Name,
-					kube.LabelResourceNamespace: workload.Namespace,
-					kube.LabelContainerName:     containerName,
-					"starboard.container.image": fmt.Sprintf("%s-%s", image, tag),
+					kube.LabelResourceKind:          string(workload.Kind),
+					kube.LabelResourceName:          workload.Name,
+					kube.LabelResourceNamespace:     workload.Namespace,
+					kube.LabelContainerName:         containerName,
+					"starboard.container.imagehash": containerImages[containerName],
 				},
 			},
 			Report: report,
@@ -81,13 +79,11 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 	return nil
 }
 
-func (s *Store) Read(ctx context.Context, workload kube.Object, containerImage string) (vulnerabilities.WorkloadVulnerabilities, error) {
+func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (vulnerabilities.WorkloadVulnerabilities, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
 
-	image, tag := s.getImageRepoTags(containerImage)
-
 	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{
-		"starboard.container.image": fmt.Sprintf("%s-%s", image, tag),
+		"starboard.container.imagehash": containerImageHash,
 	}, client.InNamespace(workload.Namespace))
 	if err != nil {
 		return nil, err
@@ -134,8 +130,8 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 func (s *Store) HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error) {
 
 	imageReportCount := 0
-	for _, containerImage := range containerImages {
-		vulnerabilityReports, err := s.Read(ctx, owner, containerImage)
+	for _, containerImageHash := range containerImages {
+		vulnerabilityReports, err := s.Read(ctx, owner, containerImageHash)
 		if err != nil {
 			return false, err
 		}
@@ -147,29 +143,4 @@ func (s *Store) HasVulnerabilityReports(ctx context.Context, owner kube.Object, 
 	}
 
 	return true, nil
-	// actual := map[string]bool{}
-	// for containerName, _ := range vulnerabilityReports {
-	// 	actual[containerName] = true
-	// }
-	//
-	// expected := map[string]bool{}
-	// for containerName, _ := range containerImages {
-	// 	expected[containerName] = true
-	// }
-
-	//return reflect.DeepEqual(actual, expected), nil
-}
-
-func (s *Store) getImageRepoTags(imageString string) (string, string) {
-	split := strings.Split(imageString, "/")
-	if len(split) > 1 {
-		split = strings.Split(split[len(split)-1], ":")
-	} else {
-		split = strings.Split(split[0], ":")
-		if len(split) < 2 {
-			split = append(split, "latest")
-		}
-	}
-	//Return image, tag
-	return split[0], split[1]
 }

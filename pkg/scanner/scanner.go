@@ -27,6 +27,6 @@ type Options struct {
 // the specified Kubernetes workload with the given Pod descriptor and Options.
 //
 type VulnerabilityScanner interface {
-	NewScanJob(workload kube.Object, spec corev1.PodSpec, options Options) (*batchv1.Job, error)
+	NewScanJob(workload kube.Object, spec corev1.PodStatus, options Options) (*batchv1.Job, error)
 	ParseVulnerabilityReport(imageRef string, logsReader io.ReadCloser) (v1alpha1.VulnerabilityScanResult, error)
 }
