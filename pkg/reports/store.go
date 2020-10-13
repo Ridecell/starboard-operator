@@ -26,7 +26,7 @@ import (
 
 type StoreInterface interface {
 	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities, containerImages kube.ContainerImages) error
-	Read(ctx context.Context, workload kube.Object, containerImage string) (vulnerabilities.WorkloadVulnerabilities, error)
+	Read(ctx context.Context, workload kube.Object, containerImage string) (*starboardv1alpha1.VulnerabilityScanResult, error)
 	HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error)
 }
 
@@ -81,7 +81,7 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 	return nil
 }
 
-func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (vulnerabilities.WorkloadVulnerabilities, error) {
+func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (*starboardv1alpha1.VulnerabilityScanResult, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
 
 	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{}, client.InNamespace(workload.Namespace))
@@ -89,14 +89,12 @@ func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHa
 		return nil, err
 	}
 
-	reports := make(map[string]starboardv1alpha1.VulnerabilityScanResult)
 	for _, item := range vulnerabilityList.Items {
 		if containerHash, ok := item.Annotations["starboard.container.imagehash"]; ok && containerHash == strings.Split(containerImageHash, " ")[1] {
-			reports[containerHash] = item.Report
-			break
+			return &item.Report, nil
 		}
 	}
-	return reports, nil
+	return nil, nil
 }
 
 func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (metav1.Object, error) {
@@ -130,18 +128,11 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 
 func (s *Store) HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error) {
 
-	imageReportCount := 0
 	for _, containerImageHash := range containerImages {
-		vulnerabilityReports, err := s.Read(ctx, owner, containerImageHash)
-		if err != nil {
+		vulnerabilityReport, err := s.Read(ctx, owner, containerImageHash)
+		if vulnerabilityReport == nil {
 			return false, err
 		}
-		imageReportCount = imageReportCount + len(vulnerabilityReports)
 	}
-
-	if len(containerImages) > imageReportCount {
-		return false, nil
-	}
-
 	return true, nil
 }
