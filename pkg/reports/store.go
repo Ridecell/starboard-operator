@@ -83,8 +83,8 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 
 func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (*starboardv1alpha1.VulnerabilityScanResult, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
-
-	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{}, client.InNamespace(workload.Namespace))
+	// Passing empty namespace name, so that it lists objects across all namespaces, we can even ignore that parameter (but kept in case we need in future)
+	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{}, client.InNamespace(""))
 	if err != nil {
 		return nil, err
 	}

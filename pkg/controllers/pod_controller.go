@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 
@@ -99,6 +100,15 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	if hasVulnerabilityReports {
 		log.V(1).Info("Ignoring Pod that already has VulnerabilityReports")
 		return ctrl.Result{}, nil
+	}
+
+	// Check if any scan job is already running, we want to run 1 scan job at a time
+	running, err := r.isAnyScanJobRunning(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if running {
+		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 	}
 
 	// Create a scan Job to create VulnerabilityReports for the Pod containers images.
@@ -199,4 +209,24 @@ func SliceContainsString(slice []string, value string) bool {
 		}
 	}
 	return exists
+}
+
+func (r *PodReconciler) isAnyScanJobRunning(ctx context.Context) (bool, error) {
+	// List scan job managed by starboard operator
+	jobList := &batchv1.JobList{}
+	err := r.Client.List(ctx, jobList, client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "starboard-operator",
+	}, client.InNamespace(r.Config.Namespace))
+	if err != nil {
+		return false, fmt.Errorf("Error listing jobs: %w", err)
+	}
+
+	// check status if running
+	for _, job := range jobList.Items {
+		if job.Status.Active > int32(0) {
+			// scan job is running
+			return true, nil
+		}
+	}
+	return false, nil
 }
