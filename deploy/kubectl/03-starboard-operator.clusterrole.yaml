@@ -10,6 +10,7 @@ rules:
       - "pods"
       - "pods/log"
       - "daemonsets"
+      - "nodes"
     verbs:
       - get
       - list
