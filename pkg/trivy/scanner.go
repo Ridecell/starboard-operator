@@ -101,6 +101,11 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 					ReadOnly:  false,
 					MountPath: "/var/lib/trivy",
 				},
+				{
+					Name:      "docker-config",
+					ReadOnly:  true,
+					MountPath: "/root/.docker",
+				},
 			},
 		}
 	}
@@ -109,6 +114,8 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 	if err != nil {
 		return nil, err
 	}
+	// A hack to Pass pointer of corev1.HostPathDirectory to HostPath Type
+	directoryType := corev1.HostPathDirectory
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -147,6 +154,15 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{
 									Medium: corev1.StorageMediumDefault,
+								},
+							},
+						},
+						{
+							Name: "docker-config",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/root/.docker",
+									Type: &directoryType,
 								},
 							},
 						},
