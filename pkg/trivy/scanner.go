@@ -3,6 +3,7 @@ package trivy
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aquasecurity/starboard/pkg/find/vulnerabilities/trivy"
 
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	trivyImageRef = "aquasec/trivy:0.11.0"
+	trivyImageRef = "aquasec/trivy:0.16.0"
 )
 
 func NewScanner() scanner.VulnerabilityScanner {
@@ -30,7 +31,7 @@ func NewScanner() scanner.VulnerabilityScanner {
 type trivyScanner struct {
 }
 
-func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, options scanner.Options) (*batchv1.Job, error) {
+func (s *trivyScanner) NewScanJob(workload kube.Object, status corev1.PodStatus, options scanner.Options) (*batchv1.Job, error) {
 	jobName := fmt.Sprintf(uuid.New().String())
 
 	initContainerName := jobName
@@ -61,9 +62,12 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 
 	containerImages := kube.ContainerImages{}
 
-	scanJobContainers := make([]corev1.Container, len(spec.Containers))
-	for i, c := range spec.Containers {
-		containerImages[c.Name] = c.Image
+	scanJobContainers := make([]corev1.Container, len(status.ContainerStatuses))
+	for i, c := range status.ContainerStatuses {
+		// Container name and image hash pair
+		imageIdSlice := strings.Split(c.ImageID, ":")
+		// Add containerName : "imageName<space>Imagehash" pair
+		containerImages[c.Name] = fmt.Sprintf("%s %s", c.Image, imageIdSlice[len(imageIdSlice)-1])
 
 		var envs []corev1.EnvVar
 
@@ -101,6 +105,11 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 					ReadOnly:  false,
 					MountPath: "/var/lib/trivy",
 				},
+				{
+					Name:      "docker-config",
+					ReadOnly:  true,
+					MountPath: "/root/.docker",
+				},
 			},
 		}
 	}
@@ -109,6 +118,8 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 	if err != nil {
 		return nil, err
 	}
+	// A hack to Pass pointer of corev1.HostPathDirectory to HostPath Type
+	directoryType := corev1.HostPathDirectory
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -128,6 +139,7 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 			BackoffLimit:          pointer.Int32Ptr(0),
 			Completions:           pointer.Int32Ptr(1),
 			ActiveDeadlineSeconds: scanners.GetActiveDeadlineSeconds(options.ScanJobTimeout),
+			//TTLSecondsAfterFinished: pointer.Int32Ptr(600),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -147,6 +159,15 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, spec corev1.PodSpec, opt
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{
 									Medium: corev1.StorageMediumDefault,
+								},
+							},
+						},
+						{
+							Name: "docker-config",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/root/.docker",
+									Type: &directoryType,
 								},
 							},
 						},

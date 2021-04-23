@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aquasecurity/starboard-operator/pkg/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"strings"
 
 	"github.com/aquasecurity/starboard-operator/pkg/etc"
 	"github.com/aquasecurity/starboard-operator/pkg/logs"
@@ -102,7 +103,8 @@ func (r *JobReconciler) processCompleteScanJob(ctx context.Context, scanJob *bat
 
 	pod, err := r.GetPodControlledBy(ctx, scanJob)
 	if err != nil {
-		return fmt.Errorf("getting pod controlled by %s/%s: %w", scanJob.Namespace, scanJob.Name, err)
+		log.V(1).Info("getting pod controlled by ", scanJob.Namespace, scanJob.Name, err)
+		return r.Client.Delete(ctx, scanJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
 	}
 
 	vulnerabilityReports := make(map[string]v1alpha1.VulnerabilityScanResult)
@@ -112,21 +114,24 @@ func (r *JobReconciler) processCompleteScanJob(ctx context.Context, scanJob *bat
 			Follow:    true,
 		})
 		if err != nil {
-			return fmt.Errorf("getting logs for pod %s/%s: %w", pod.Namespace, pod.Name, err)
+			log.V(1).Info("Error getting logs for pod : ", pod.Namespace, pod.Name, err)
+			return r.Client.Delete(ctx, scanJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		}
-		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(containerImages[container.Name], logsReader)
+		vulnerabilityReports[container.Name], err = r.Scanner.ParseVulnerabilityReport(strings.Split(containerImages[container.Name], " ")[0], logsReader)
 		if err != nil {
-			return err
+			log.V(1).Info("Error generating vulneribilty report from pod's log: ", err)
+			return r.Client.Delete(ctx, scanJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		}
 		_ = logsReader.Close()
 	}
 
 	log.Info("Writing VulnerabilityReports", "owner", workload)
-	err = r.Store.Write(ctx, workload, vulnerabilityReports)
+	err = r.Store.Write(ctx, workload, vulnerabilityReports, containerImages)
 	if err != nil {
-		return fmt.Errorf("writing vulnerability reports: %w", err)
+		// Just log error and delete scan job after if block
+		log.V(1).Info("error writing vulnerability reports: ", err)
 	}
-	log.V(1).Info("Deleting complete scan job")
+	log.V(1).Info("Deleting scan job: ", scanJob.Name)
 	return r.Client.Delete(ctx, scanJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
 }
 
@@ -156,7 +161,7 @@ func (r *JobReconciler) processFailedScanJob(ctx context.Context, scanJob *batch
 		if status.ExitCode == 0 {
 			continue
 		}
-		r.Log.Error(nil, "Scan job container", "container", container, "status.reason", status.Reason, "status.message", status.Message)
+		r.Log.Error(nil, "Scan job container", "container", container, "pod", pod.Labels["starboard.resource.name"], "pod_namespace", pod.Labels["starboard.resource.namespace"], "status.reason", status.Reason, "status.message", status.Message)
 	}
 	r.Log.V(1).Info("Deleting failed scan job")
 	return r.Client.Delete(ctx, scanJob, client.PropagationPolicy(metav1.DeletePropagationBackground))

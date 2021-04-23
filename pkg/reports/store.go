@@ -3,12 +3,13 @@ package reports
 import (
 	"context"
 	"fmt"
-	"reflect"
+	//"reflect"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	//v1beta2 "github.com/GoogleCloudPlatform/spark-on-k8s-operator/pkg/apis/sparkoperator.k8s.io/v1beta2"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,8 +26,8 @@ import (
 )
 
 type StoreInterface interface {
-	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities) error
-	Read(ctx context.Context, workload kube.Object) (vulnerabilities.WorkloadVulnerabilities, error)
+	Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities, containerImages kube.ContainerImages) error
+	Read(ctx context.Context, workload kube.Object, containerImage string) (*starboardv1alpha1.VulnerabilityScanResult, error)
 	HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error)
 }
 
@@ -42,7 +43,7 @@ func NewStore(client client.Client, scheme *runtime.Scheme) *Store {
 	}
 }
 
-func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities) error {
+func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnerabilities.WorkloadVulnerabilities, containerImages kube.ContainerImages) error {
 	owner, err := s.getRuntimeObjectFor(ctx, workload)
 	if err != nil {
 		return err
@@ -62,6 +63,9 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 					kube.LabelResourceNamespace: workload.Namespace,
 					kube.LabelContainerName:     containerName,
 				},
+				Annotations: map[string]string{
+					"starboard.container.imagehash": strings.Split(containerImages[containerName], " ")[1],
+				},
 			},
 			Report: report,
 		}
@@ -71,32 +75,27 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 		}
 
 		err := s.client.Create(ctx, vulnerabilityReport)
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) Read(ctx context.Context, workload kube.Object) (vulnerabilities.WorkloadVulnerabilities, error) {
+func (s *Store) Read(ctx context.Context, workload kube.Object, containerImageHash string) (*starboardv1alpha1.VulnerabilityScanResult, error) {
 	vulnerabilityList := &starboardv1alpha1.VulnerabilityReportList{}
-
-	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{
-		kube.LabelResourceKind:      string(workload.Kind),
-		kube.LabelResourceNamespace: workload.Namespace,
-		kube.LabelResourceName:      workload.Name,
-	}, client.InNamespace(workload.Namespace))
+	// Passing empty namespace name, so that it lists objects across all namespaces, we can even ignore that parameter (but kept in case we need in future)
+	err := s.client.List(ctx, vulnerabilityList, client.MatchingLabels{}, client.InNamespace(""))
 	if err != nil {
 		return nil, err
 	}
 
-	reports := make(map[string]starboardv1alpha1.VulnerabilityScanResult)
 	for _, item := range vulnerabilityList.Items {
-		if container, ok := item.Labels[kube.LabelContainerName]; ok {
-			reports[container] = item.Report
+		if containerHash, ok := item.Annotations["starboard.container.imagehash"]; ok && containerHash == strings.Split(containerImageHash, " ")[1] {
+			return &item.Report, nil
 		}
 	}
-	return reports, nil
+	return nil, nil
 }
 
 func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (metav1.Object, error) {
@@ -118,10 +117,22 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 		obj = &v1beta1.CronJob{}
 	case kube.KindJob:
 		obj = &batchv1.Job{}
+	case kube.KindNode:
+		obj = &corev1.Node{}
+	// case "SparkApplication":
+	// 	obj = &v1beta2.SparkApplication{}
 	default:
 		return nil, fmt.Errorf("unknown workload kind: %s", workload.Kind)
 	}
-	err := s.client.Get(ctx, types.NamespacedName{Name: workload.Name, Namespace: workload.Namespace}, obj)
+
+	var types_obj types.NamespacedName
+	if workload.Kind == kube.KindNode {
+		types_obj = types.NamespacedName{Name: workload.Name}
+	} else {
+		types_obj = types.NamespacedName{Name: workload.Name, Namespace: workload.Namespace}
+	}
+
+	err := s.client.Get(ctx, types_obj, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -129,20 +140,12 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 }
 
 func (s *Store) HasVulnerabilityReports(ctx context.Context, owner kube.Object, containerImages kube.ContainerImages) (bool, error) {
-	vulnerabilityReports, err := s.Read(ctx, owner)
-	if err != nil {
-		return false, err
-	}
 
-	actual := map[string]bool{}
-	for containerName, _ := range vulnerabilityReports {
-		actual[containerName] = true
+	for _, containerImageHash := range containerImages {
+		vulnerabilityReport, err := s.Read(ctx, owner, containerImageHash)
+		if vulnerabilityReport == nil {
+			return false, err
+		}
 	}
-
-	expected := map[string]bool{}
-	for containerName, _ := range containerImages {
-		expected[containerName] = true
-	}
-
-	return reflect.DeepEqual(actual, expected), nil
+	return true, nil
 }

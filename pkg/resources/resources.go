@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -10,10 +11,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-func GetContainerImagesFromPodSpec(spec corev1.PodSpec) kube.ContainerImages {
+func GetContainerImagesFromPodStatus(status corev1.PodStatus) kube.ContainerImages {
 	images := kube.ContainerImages{}
-	for _, container := range spec.Containers {
-		images[container.Name] = container.Image
+	for _, container := range status.ContainerStatuses {
+		// Extract Image hash from Image ID
+		imageIdSlice := strings.Split(container.ImageID, ":")
+		// Add containerName : "imageName<space>Imagehash" pair
+		images[container.Name] = fmt.Sprintf("%s %s", container.Image, imageIdSlice[len(imageIdSlice)-1])
 	}
 	return images
 }
