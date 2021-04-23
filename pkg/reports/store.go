@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	//v1beta2 "github.com/GoogleCloudPlatform/spark-on-k8s-operator/pkg/apis/sparkoperator.k8s.io/v1beta2"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,7 +75,7 @@ func (s *Store) Write(ctx context.Context, workload kube.Object, reports vulnera
 		}
 
 		err := s.client.Create(ctx, vulnerabilityReport)
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
 			return err
 		}
 	}
@@ -116,10 +117,22 @@ func (s *Store) getRuntimeObjectFor(ctx context.Context, workload kube.Object) (
 		obj = &v1beta1.CronJob{}
 	case kube.KindJob:
 		obj = &batchv1.Job{}
+	case kube.KindNode:
+		obj = &corev1.Node{}
+	// case "SparkApplication":
+	// 	obj = &v1beta2.SparkApplication{}
 	default:
 		return nil, fmt.Errorf("unknown workload kind: %s", workload.Kind)
 	}
-	err := s.client.Get(ctx, types.NamespacedName{Name: workload.Name, Namespace: workload.Namespace}, obj)
+
+	var types_obj types.NamespacedName
+	if workload.Kind == kube.KindNode {
+		types_obj = types.NamespacedName{Name: workload.Name}
+	} else {
+		types_obj = types.NamespacedName{Name: workload.Name, Namespace: workload.Namespace}
+	}
+
+	err := s.client.Get(ctx, types_obj, obj)
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	trivyImageRef = "aquasec/trivy:0.11.0"
+	trivyImageRef = "aquasec/trivy:0.16.0"
 )
 
 func NewScanner() scanner.VulnerabilityScanner {
@@ -139,6 +139,7 @@ func (s *trivyScanner) NewScanJob(workload kube.Object, status corev1.PodStatus,
 			BackoffLimit:          pointer.Int32Ptr(0),
 			Completions:           pointer.Int32Ptr(1),
 			ActiveDeadlineSeconds: scanners.GetActiveDeadlineSeconds(options.ScanJobTimeout),
+			//TTLSecondsAfterFinished: pointer.Int32Ptr(600),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
